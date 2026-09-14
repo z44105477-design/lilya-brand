@@ -170,7 +170,7 @@
     <div class="view" id="view-orders">
       <div class="view-head"><h2>الطلبات</h2><button class="btn btn-ghost" id="refreshOrders">تحديث</button></div>
       <table>
-        <thead><tr><th>التاريخ</th><th>الزبون</th><th>الهاتف</th><th>المنتج</th><th>الولاية</th><th>التوصيل</th><th>المجموع</th></tr></thead>
+        <thead><tr><th>التاريخ</th><th>الزبون</th><th>الهاتف</th><th>المنتج</th><th>الولاية</th><th>التوصيل</th><th>المجموع</th><th>شركة التوصيل</th></tr></thead>
         <tbody id="ordersTable"></tbody>
       </table>
       <div class="empty" id="ordersEmpty" style="display:none;">لا توجد طلبات بعد. يتم تأكيد الطلبات عبر واتساب مباشرة من الموقع.</div>
@@ -188,6 +188,18 @@
           <input type="password" id="newPass" style="width:100%;padding:10px;border:1.5px solid var(--line);border-radius:7px;margin:6px 0 12px;">
           <button class="btn btn-primary" id="changePassBtn">حفظ كلمة المرور</button>
           <div class="err" id="passErr" style="margin-top:10px;"></div>
+        </div>
+      </div>
+      <div class="modal" style="width:100%;max-width:480px;padding:0;margin-top:20px;">
+        <div style="padding:24px;">
+          <h3 style="margin-top:0;">ربط شركة التوصيل NOEST EXPRESS</h3>
+          <p style="font-size:12.5px;color:#8a8081;margin-top:0;">أدخلي مفاتيح API الخاصة بحسابك على Noest (من لوحة تحكم Noest الخاصة بك). لن يُرسل أي طلب لشركة التوصيل تلقائيًا — فقط عند ضغطك على زر "تأكيد وإرسال" بجانب كل طلب في قسم الطلبات.</p>
+          <label style="font-size:13px;font-weight:700;">Noest API Token</label>
+          <input type="text" id="noestToken" style="width:100%;padding:10px;border:1.5px solid var(--line);border-radius:7px;margin:6px 0 12px;" placeholder="من لوحة تحكم Noest">
+          <label style="font-size:13px;font-weight:700;">Noest GUID</label>
+          <input type="text" id="noestGuid" style="width:100%;padding:10px;border:1.5px solid var(--line);border-radius:7px;margin:6px 0 12px;" placeholder="من لوحة تحكم Noest">
+          <button class="btn btn-primary" id="saveNoestBtn">حفظ بيانات Noest</button>
+          <div class="err" id="noestErr" style="margin-top:10px;"></div>
         </div>
       </div>
     </div>
@@ -724,6 +736,111 @@ document.getElementById("saveProductBtn").onclick = async ()=>{
   }
 };
 
+/* ---------- Noest Express integration (via dzship unified API) ----------
+   No order is ever sent automatically. The admin reviews/confirms the
+   order with the customer herself (over WhatsApp as usual), then presses
+   "تأكيد وإرسال" for that specific order here — only then is it created
+   on the Noest account. */
+const WILAYA_NAME_TO_CODE = {
+ "Blida":19,"Médéa":10,"Alger":34,"Boumerdès":16,"Tipaza":23,"Tizi Ouzou":5,"Bouira":6,
+ "Chlef":28,"Bejaia":9,"Bordj Bou Arreridj":25,"Ain Defla":18,"Ain Temouchent":40,
+ "Annaba":26,"Batna":43,"Constantine":4,"Mascara":36,"Mila":24,"Mostaganem":41,
+ "M'Sila":12,"Oran":44,"Oum El Bouagui":2,"Relizane":27,"Setif":46,"Sidi Bel Abbes":29,
+ "Skikda":48,"Tissemsilt":14,"Tlemcen":13,"Jijel":35,"El Tarf":21,"Guelma":42,
+ "Kenchela":15,"Saida":31,"Souk Ahrass":22,"Tebessa":38,"Tiaret":20,"Biskra":7,
+ "Ouled Djellal":51,"Djelfa":17,"Laghouat":3,"Ghardaïa":39,"El Meniaa":57,"El Oued":47,
+ "El M'Ghair":58,"Ouargla":30,"Touggourt":55,"El Bayadh":8,"Naama":52,"Bechar":32,
+ "Beni Abbes":45,"Adrar":1,"Timimoun":49,"Tindouf":37,"In Salah":53,"illizi":11,
+ "Tamanrasset":33,"Djanet":56
+};
+
+let NOEST_CREDS = {token:"", guid:""};
+async function loadNoestCreds(){
+  try{
+    const snap = await db.collection("config").doc("settings").get();
+    const d = (snap.exists && snap.data()) || {};
+    NOEST_CREDS = {token: d.noest_token || "", guid: d.noest_guid || ""};
+  }catch(e){ console.error("could not load Noest credentials:", e); }
+}
+
+document.getElementById("saveNoestBtn").onclick = async ()=>{
+  const token = document.getElementById("noestToken").value.trim();
+  const guid = document.getElementById("noestGuid").value.trim();
+  const errBox = document.getElementById("noestErr");
+  try{
+    await db.collection("config").doc("settings").set({noest_token: token, noest_guid: guid}, {merge:true});
+    NOEST_CREDS = {token, guid};
+    errBox.style.color = "var(--green)";
+    errBox.textContent = "تم حفظ بيانات Noest بنجاح.";
+  }catch(e){
+    console.error("save noest creds failed:", e);
+    errBox.style.color = "var(--red)";
+    errBox.textContent = "تعذّر الحفظ، تحققي من الاتصال بالإنترنت.";
+  }
+};
+
+async function sendOrderToNoest(orderId){
+  const order = ORDERS.find(o=>o.id===orderId);
+  if(!order) return;
+  if(!NOEST_CREDS.token || !NOEST_CREDS.guid){
+    alert("أدخلي بيانات Noest (API Token و GUID) أولًا من قسم الإعدادات.");
+    return;
+  }
+  const wilayaCode = WILAYA_NAME_TO_CODE[order.wilaya];
+  if(!wilayaCode){
+    alert(`تعذّر تحديد رمز الولاية "${order.wilaya}". تواصلي معي لمراجعة اسم الولاية.`);
+    return;
+  }
+  if(!confirm(`تأكيد إرسال طلب ${order.name} ${order.lastname} إلى Noest Express؟`)) return;
+
+  const btn = document.querySelector(`button[data-noest-btn="${orderId}"]`);
+  if(btn){ btn.disabled = true; btn.textContent = "جارٍ الإرسال..."; }
+
+  const payload = {
+    courier: "noest",
+    credentials: { apiToken: NOEST_CREDS.token, guid: NOEST_CREDS.guid },
+    order: {
+      reference: order.id,
+      recipient: {
+        fullName: `${order.name} ${order.lastname}`,
+        phone: order.phone,
+        wilayaCode: wilayaCode,
+        communeName: order.commune
+      },
+      deliveryType: order.deliv === "Domicile" ? "home" : "stopdesk",
+      productList: `${order.product ? order.product.name : "منتج"}${order.color?(" - "+order.color):""}${order.size?(" - "+order.size):""} × ${order.qty}`,
+      codAmount: Math.round(order.total || 0)
+    }
+  };
+
+  try{
+    const res = await fetch("https://freeship.dzbuild.com/v1/orders", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if(!res.ok){
+      const msg = (data && data.error && data.error.message) || "خطأ غير معروف";
+      alert(`تعذّر إرسال الطلب إلى Noest: ${msg}`);
+      if(btn){ btn.disabled = false; btn.textContent = "تأكيد وإرسال"; }
+      return;
+    }
+    await db.collection("orders").doc(orderId).update({
+      noestStatus: "sent",
+      noestTracking: data.trackingNumber || null,
+      noestSentAt: new Date().toISOString()
+    });
+    order.noestStatus = "sent";
+    order.noestTracking = data.trackingNumber || null;
+    renderOrders();
+  }catch(e){
+    console.error("send to Noest failed:", e);
+    alert("تعذّر الاتصال بخدمة التوصيل. تحققي من الإنترنت وحاولي من جديد.");
+    if(btn){ btn.disabled = false; btn.textContent = "تأكيد وإرسال"; }
+  }
+}
+
 /* ---------- orders ---------- */
 function renderOrders(){
   loadOrders().then(list=>{
@@ -731,7 +848,11 @@ function renderOrders(){
     const tbody = document.getElementById("ordersTable");
     const empty = document.getElementById("ordersEmpty");
     empty.style.display = ORDERS.length ? "none" : "block";
-    tbody.innerHTML = ORDERS.map(o=>`
+    tbody.innerHTML = ORDERS.map(o=>{
+      const noestCell = o.noestStatus === "sent"
+        ? `<span class="avail-pill yes">أُرسل${o.noestTracking?(" — "+o.noestTracking):""}</span>`
+        : `<button class="icon-sm" data-noest-btn="${o.id}" onclick="sendOrderToNoest('${o.id}')">تأكيد وإرسال</button>`;
+      return `
       <tr>
         <td>${new Date(o.createdAt).toLocaleString('fr-FR')}</td>
         <td>${o.name} ${o.lastname}</td>
@@ -740,7 +861,9 @@ function renderOrders(){
         <td>${o.wilaya} - ${o.commune}</td>
         <td>${o.deliv}</td>
         <td>${Number(o.total).toLocaleString('fr-FR')} DA</td>
-      </tr>`).join("");
+        <td>${noestCell}</td>
+      </tr>`;
+    }).join("");
     renderDash();
   });
 }
@@ -772,6 +895,9 @@ document.getElementById("changePassBtn").onclick = async ()=>{
 async function boot(){
   PRODUCTS = await loadProducts();
   ORDERS = await loadOrders();
+  await loadNoestCreds();
+  document.getElementById("noestToken").value = NOEST_CREDS.token;
+  document.getElementById("noestGuid").value = NOEST_CREDS.guid;
   renderProductsTable();
   renderOrders();
   renderDash();
