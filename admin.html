@@ -814,7 +814,7 @@ async function sendOrderToNoest(orderId){
   };
 
   try{
-    const res = await fetch("https://freeship.dzbuild.com/v1/orders", {
+    const res = await fetch("/.netlify/functions/send-to-noest", {
       method: "POST",
       headers: {"Content-Type":"application/json"},
       body: JSON.stringify(payload)
