@@ -1,0 +1,59 @@
+/* ============================================================
+   لصق هذا الكود داخل index.html — في نفس مكان كود نموذج الطلب،
+   عند اختيار الزبون "توصيل للمكتب" (Stop Desk)
+   ============================================================ */
+
+/**
+ * تُستدعى عند اختيار الزبون ولاية + "توصيل للمكتب".
+ * تملأ عنصر <select id="noest-desk-select"> بقائمة المكاتب الحقيقية
+ * إن توفرت، أو تُظهر حقل نص عادي <input id="noest-desk-manual"> إذا
+ * تعذّر الجلب التلقائي — بحيث لا يتعطل الطلب أبدًا مهما حدث.
+ */
+async function loadNoestDesks(wilayaCode) {
+  const selectEl = document.getElementById("noest-desk-select");
+  const manualEl = document.getElementById("noest-desk-manual");
+  const manualWrap = document.getElementById("noest-desk-manual-wrap");
+  const selectWrap = document.getElementById("noest-desk-select-wrap");
+
+  if (selectEl) selectEl.innerHTML = '<option value="">جارٍ التحميل...</option>';
+
+  try {
+    const res = await fetch(`/.netlify/functions/get-noest-desks?wilayaCode=${wilayaCode}`);
+    const data = await res.json();
+
+    if (data.ok && !data.fallback && data.desks && data.desks.length > 0) {
+      // نجح الجلب التلقائي: نعرض القائمة المنسدلة الحقيقية
+      if (selectWrap) selectWrap.style.display = "block";
+      if (manualWrap) manualWrap.style.display = "none";
+      selectEl.innerHTML = data.desks
+        .map(
+          (d) =>
+            `<option value="${d.code || d.id || d.name}">${d.name}${d.address ? " — " + d.address : ""}</option>`
+        )
+        .join("");
+    } else {
+      // تعذّر الجلب التلقائي: نعرض حقل كتابة يدوي بدل تعطيل الصفحة
+      if (selectWrap) selectWrap.style.display = "none";
+      if (manualWrap) manualWrap.style.display = "block";
+    }
+  } catch (err) {
+    if (selectWrap) selectWrap.style.display = "none";
+    if (manualWrap) manualWrap.style.display = "block";
+  }
+}
+
+/* ============================================================
+   أضف هذا الجزء داخل نموذج الطلب في index.html، بجانب اختيار الولاية:
+
+   <div id="noest-desk-select-wrap" style="display:none">
+     <label>اختر المكتب</label>
+     <select id="noest-desk-select"></select>
+   </div>
+   <div id="noest-desk-manual-wrap" style="display:none">
+     <label>اكتب اسم أقرب مكتب Noest في منطقتك</label>
+     <input id="noest-desk-manual" type="text" placeholder="مثال: مكتب Noest سطيف وسط">
+   </div>
+
+   ثم عند تغيير الولاية أو اختيار "توصيل للمكتب"، نادِ:
+   loadNoestDesks(wilayaCode)
+   ============================================================ */
