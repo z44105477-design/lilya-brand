@@ -1,0 +1,44 @@
+// Netlify serverless function.
+// The admin panel calls this same-origin endpoint instead of calling
+// https://freeship.dzbuild.com directly from the browser — this avoids
+// CORS issues and keeps the request server-to-server.
+exports.handler = async function (event) {
+  if (event.httpMethod !== "POST") {
+    return {
+      statusCode: 405,
+      body: JSON.stringify({ error: { message: "Method not allowed" } }),
+    };
+  }
+
+  let payload;
+  try {
+    payload = JSON.parse(event.body || "{}");
+  } catch (e) {
+    return {
+      statusCode: 400,
+      body: JSON.stringify({ error: { message: "Invalid JSON body" } }),
+    };
+  }
+
+  try {
+    const res = await fetch("https://freeship.dzbuild.com/v1/orders", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    return {
+      statusCode: res.status,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    };
+  } catch (err) {
+    return {
+      statusCode: 502,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        error: { message: err && err.message ? err.message : "proxy_error" },
+      }),
+    };
+  }
+};
