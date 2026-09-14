@@ -1,0 +1,80 @@
+// netlify/functions/get-noest-desks.js
+//
+// ⚠️ ملاحظة مهمة وصريحة: شركة Noest لا تنشر توثيقًا رسميًا لواجهتها
+// البرمجية (API) بشكل عام، لذلك نقطة النهاية (endpoint) هنا مبنية على
+// أفضل استنتاج ممكن من نفس البوابة (freeship.dzbuild.com) التي تُرسل
+// إليها طلبياتك بنجاح حاليًا. إن لم تُرجع بيانات صحيحة، فهذا يعني أن
+// المسار الدقيق مختلف قليلاً — أرسل لي حينها استجابة الخطأ (تظهر في
+// console المتصفح) وأصححه معك مباشرة. المتجر لن يتعطل بأي حال: إذا
+// فشل الجلب التلقائي، يظهر تلقائيًا حقل نصي لكتابة اسم المكتب يدويًا.
+
+const FREESHIP_DESKS_URL = "https://freeship.dzbuild.com/v1/desks";
+
+exports.handler = async function (event) {
+  const headers = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Content-Type": "application/json",
+  };
+
+  if (event.httpMethod === "OPTIONS") {
+    return { statusCode: 204, headers, body: "" };
+  }
+
+  const wilayaCode = event.queryStringParameters && event.queryStringParameters.wilayaCode;
+  if (!wilayaCode) {
+    return {
+      statusCode: 400,
+      headers,
+      body: JSON.stringify({ ok: false, error: "wilayaCode مفقود" }),
+    };
+  }
+
+  const NOEST_API_TOKEN = process.env.NOEST_API_TOKEN;
+  const NOEST_GUID = process.env.NOEST_GUID;
+  if (!NOEST_API_TOKEN || !NOEST_GUID) {
+    return {
+      statusCode: 500,
+      headers,
+      body: JSON.stringify({ ok: false, error: "رمز Noest غير مضبوط في Netlify" }),
+    };
+  }
+
+  try {
+    const url = `${FREESHIP_DESKS_URL}?courier=noest&wilayaCode=${encodeURIComponent(wilayaCode)}`;
+    const res = await fetch(url, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Courier-Credentials": JSON.stringify({
+          apiToken: NOEST_API_TOKEN,
+          guid: NOEST_GUID,
+        }),
+      },
+    });
+
+    if (!res.ok) {
+      // لم يُرجع الخادم بيانات صحيحة — نُعيد قائمة فارغة بدل خطأ يوقف
+      // الصفحة، والواجهة الأمامية تعرض عندها حقل "اكتب اسم المكتب" يدويًا
+      return {
+        statusCode: 200,
+        headers,
+        body: JSON.stringify({ ok: true, desks: [], fallback: true }),
+      };
+    }
+
+    const data = await res.json();
+    return {
+      statusCode: 200,
+      headers,
+      body: JSON.stringify({ ok: true, desks: data.desks || data || [], fallback: false }),
+    };
+  } catch (err) {
+    return {
+      statusCode: 200,
+      headers,
+      body: JSON.stringify({ ok: true, desks: [], fallback: true }),
+    };
+  }
+};
